@@ -1,0 +1,14 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {parseQuizCsv,prepareQuizImport,decodeQuizCsv,MAX_CSV_BYTES} from '../src/quiz-csv.mjs';
+import {DemoStore} from '../src/demo-store.mjs';
+import {productArts,artIndex,productPicture} from '../src/product-art.mjs';
+
+test('문제·정답 쌍은 단답형, OX는 자동 구분하고 기본 보상 10 적용',()=>{const rows=parseQuizCsv('\uFEFF문제,정답\r\n물의 화학식은?,H2O\r\n지구는 둥글다.,O\r\n','c2');assert.equal(rows[0].type,'short');assert.equal(rows[0].answerText,'H2O');assert.equal(rows[0].reward,10);assert.equal(rows[1].type,'ox');assert.equal(rows[1].answerIndex,0);});
+test('선택형·OX·단답형 혼합 CSV와 보기 내용으로 쓴 정답 지원',()=>{const rows=parseQuizCsv('유형,문제,보기1,보기2,보기3,보기4,정답,포인트\n4지선다,자석에 붙는 것?,종이,철,유리,나무,철,20\nOX,물은 얼 수 있다.,,,,,O,10\n단답형,정답 O를 입력하세요.,,,,,O,30','c2');assert.equal(rows[0].answerIndex,1);assert.equal(rows[1].type,'ox');assert.equal(rows[2].type,'short');assert.equal(rows[2].answerText,'O');});
+test('따옴표 안 쉼표·줄바꿈·따옴표를 보존하며 깨진 CSV는 행 번호로 거부',()=>{const rows=parseQuizCsv('문제,정답\n"쉼표, 그리고\n""따옴표""",답','c2');assert.equal(rows[0].question,'쉼표, 그리고\n"따옴표"');assert.throws(()=>parseQuizCsv('문제,정답\n"미완성,답','c2'),/2행/);assert.throws(()=>parseQuizCsv('문제,정답\n문제,답,추가','c2'),/2행/);});
+test('필수 열·중복 열·보기·보상·빈 정답·100문제 제한 검증',()=>{for(const csv of ['내용,답\nA,B','문제,정답,정답\nA,B,C','문제,정답,포인트\nA,B,1001','문제,정답\nA,'])assert.throws(()=>parseQuizCsv(csv,'c2'));assert.throws(()=>parseQuizCsv('문제,정답\n'+Array.from({length:101},(_,i)=>'문제'+i+',답').join('\n'),'c2'),/100문제/);assert.equal(parseQuizCsv('문제,정답\n'+Array.from({length:100},(_,i)=>'문제'+i+',답').join('\n'),'c2').length,100);});
+test('UTF-8·CP949 파일 읽기와 파일 크기 제한 지원',()=>{assert.equal(decodeQuizCsv(new TextEncoder().encode('문제,정답')),'문제,정답');assert.equal(decodeQuizCsv(new Uint8Array([0xb9,0xae,0xc1,0xa6])),'문제');assert.throws(()=>decodeQuizCsv(new Uint8Array(MAX_CSV_BYTES+1)),/512KB/);});
+test('가져오기 ID는 정답을 포함하지 않으며 반복 시 일정하고 파일 내 중복은 거부',async()=>{const a=await prepareQuizImport(parseQuizCsv('문제,정답\n화학식?,H2O','c2')),b=await prepareQuizImport(parseQuizCsv('문제,정답\n화학식?,CO2','c2'));assert.equal(a[0].id,b[0].id);await assert.rejects(prepareQuizImport(parseQuizCsv('문제,정답\n문제,답\n문제,답','c2')),/중복/);});
+test('체험의 CSV 재가져오기는 중복되지 않고 단답형은 대소문자·공백을 정규화',async()=>{globalThis.sessionStorage={getItem:()=>null,setItem:()=>{}};const s=new DemoStore(),jobs=await prepareQuizImport(parseQuizCsv('문제,정답\n화학식?,H2O','c2'));await s.importQuizzes(jobs);await s.importQuizzes(jobs);assert.equal(s.data.quizzes.filter(q=>q.id===jobs[0].id).length,1);assert.equal((await s.submitQuiz(jobs[0].id,'s0',' h 2 o ')).earned,10);});
+test('상품 그림 12종은 기존 번호를 유지하며 범위 밖 번호는 거부',()=>{assert.equal(productArts.length,12);assert.equal(productArts[0].name,'지우개');assert.equal(productArts[3].name,'칭찬 편지');assert.equal(artIndex(11),11);assert.throws(()=>artIndex(12));assert.match(productPicture(7),/keyring\.png/);});

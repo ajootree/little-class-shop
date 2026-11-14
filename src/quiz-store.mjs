@@ -1,7 +1,7 @@
 import {runTransaction,writeBatch,serverTimestamp,updateDoc} from 'firebase/firestore';
 import {uid,integer} from './domain.mjs';
 import {StudentAccessStore} from './student-access-store.mjs';
-import {quizInput,quizAttemptId,quizEventId} from './quiz.mjs';
+import {splitQuizInput,normalizeQuizAnswer,quizAttemptId,quizEventId} from './quiz.mjs';
 
 export class QuizStore extends StudentAccessStore{
   async quizData(owner,studentId,classId){
@@ -12,9 +12,24 @@ export class QuizStore extends StudentAccessStore{
     ]);return {quizzes,quizAttempts,quizKeys};
   }
   async addQuiz(input){
-    const {answerIndex,...q}=quizInput(input),id=uid(),b=writeBatch(this.db);
-    b.set(this.ref('quizzes',id),{...q,active:true,createdAt:serverTimestamp()});
-    b.set(this.ref('quizKeys',id),{answerIndex});await b.commit();return id;
+    const {quiz,key}=splitQuizInput(input),id=uid(),b=writeBatch(this.db);
+    b.set(this.ref('quizzes',id),{...quiz,active:true,createdAt:serverTimestamp()});
+    b.set(this.ref('quizKeys',id),key);await b.commit();return id;
+  }
+  async importQuizzes(jobs,onProgress=()=>{}){
+    if(!Array.isArray(jobs)||jobs.length<1||jobs.length>100)throw new Error('1~100문제를 준비해 주세요.');
+    const items=jobs.map(({id,input})=>{if(!/^[a-f0-9]{32}$/.test(id))throw new Error('가져오기 정보를 다시 확인해 주세요.');return {id,...splitQuizInput(input)};});
+    let processed=0;
+    try{for(let offset=0;offset<items.length;offset+=5){const chunk=items.slice(offset,offset+5);
+      await runTransaction(this.db,async tx=>{
+        const snapshots=await Promise.all(chunk.map(q=>tx.get(this.ref('quizzes',q.id))));
+        const keys=await Promise.all(chunk.map((q,i)=>snapshots[i].exists()?tx.get(this.ref('quizKeys',q.id)):Promise.resolve(null)));
+        chunk.forEach((q,i)=>{
+          if(snapshots[i].exists()){const old=snapshots[i].data(),key=keys[i]?.data();if(['question','classId','type','reward'].some(k=>old[k]!==q.quiz[k])||JSON.stringify(old.options)!==JSON.stringify(q.quiz.options)||JSON.stringify(key)!==JSON.stringify(q.key))throw new Error('이미 게시된 같은 문제의 정답은 변경할 수 없어요. 문제 내용을 구분해서 다시 준비해 주세요.');return;}
+          tx.set(this.ref('quizzes',q.id),{...q.quiz,active:true,createdAt:serverTimestamp()});tx.set(this.ref('quizKeys',q.id),q.key);
+        });
+      });processed=Math.min(offset+5,items.length);onProgress(processed,items.length);
+    }return processed;}catch(error){error.importedCount=processed;throw error;}
   }
   async setQuizActive(id,active){await updateDoc(this.ref('quizzes',id),{active:!!active});}
   async submitQuiz(quizId,studentId,choice){
@@ -23,10 +38,11 @@ export class QuizStore extends StudentAccessStore{
       const [qs,as]=await Promise.all([tx.get(this.ref('quizzes',quizId)),tx.get(this.ref('quizAttempts',id))]);
       if(as.exists())throw new Error('이미 제출한 퀴즈예요. 답은 바꿀 수 없어요.');
       const q=qs.data();if(!q?.active)throw new Error('참여가 마감된 퀴즈예요.');
-      choice=integer(choice,'답',0,q.options.length-1);
+      const answerText=q.type==='short'?normalizeQuizAnswer(choice):null;
+      choice=q.type==='short'?0:integer(choice,'답',0,q.options.length-1);
       // Commit the answer before consulting the private answer in rules. This
       // separate immutable write prevents probing different answers for rewards.
-      tx.set(this.ref('quizAttempts',id),{quizId,studentId,classId:q.classId,choice,status:'submitted',correct:false,earned:0,lastEventId:'',createdAt:serverTimestamp(),gradedAt:null});
+      tx.set(this.ref('quizAttempts',id),{quizId,studentId,classId:q.classId,choice,...(answerText!==null?{answerText}:{}),status:'submitted',correct:false,earned:0,lastEventId:'',createdAt:serverTimestamp(),gradedAt:null});
     });
     return this.finishQuiz(id);
   }

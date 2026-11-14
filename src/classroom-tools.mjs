@@ -11,6 +11,7 @@ export function shuffled(items,pick=randomIndex){
   for(let i=result.length-1;i>0;i--){const j=pick(i+1);[result[i],result[j]]=[result[j],result[i]];}
   return result;
 }
+export function drawRoster(data,classId,mode){const students=data.students.filter(s=>s.classId===classId&&s.active).sort((a,b)=>a.number-b.number);return mode==='group'?[...new Set(students.map(s=>s.groupId))].map(name=>({id:name,name})):students.map(s=>({id:s.id,name:s.number+'번 '+s.name}));}
 export function timerDuration(minutes,seconds){return integer(integer(minutes,'분',0,180)*60+integer(seconds,'초',0,59),'타이머',1,10800)*1000;}
 export function clockText(milliseconds){const seconds=Math.max(0,Math.ceil(milliseconds/1000));return String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0');}
 export class LessonTimer{

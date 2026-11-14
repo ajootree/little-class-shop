@@ -205,16 +205,17 @@ service cloud.firestore {
         function validQuiz(d) {
           return d.keys().hasOnly(['question','classId','type','options','reward','active','createdAt']) && shortText(d.question,300) && shortText(d.classId,50)
             && d.reward is int && d.reward > 0 && d.reward <= 1000 && d.active is bool && d.options is list
-            && ((d.type == 'ox' && d.options == ['O (맞다)','X (아니다)'])
+            && ((d.type == 'short' && d.options.size() == 0) || (d.type == 'ox' && d.options == ['O (맞다)','X (아니다)'])
               || (d.type == 'choice' && d.options.size() == 4 && shortText(d.options[0],80) && shortText(d.options[1],80) && shortText(d.options[2],80) && shortText(d.options[3],80)));
         }
       }
       match /quizKeys/{q} {
         allow get,list: if owner(s);
-        allow create: if owner(s) && request.resource.data.keys().hasOnly(['answerIndex']) && request.resource.data.answerIndex is int
-          && request.resource.data.answerIndex >= 0
-          && request.resource.data.answerIndex < getAfter(/databases/$(database)/documents/shops/$(s)/quizzes/$(q)).data.options.size();
+        allow create: if owner(s) && validKey(request.resource.data);
         allow update,delete: if false;
+        function validKey(d) { let quiz=getAfter(/databases/$(database)/documents/shops/$(s)/quizzes/$(q)).data;return quiz.type == 'short'
+          ? d.keys().hasOnly(['answerText']) && shortText(d.answerText,80) && d.answerText.replace(' ','').size() > 0
+          : d.keys().hasOnly(['answerIndex']) && d.answerIndex is int && d.answerIndex >= 0 && d.answerIndex < quiz.options.size(); }
       }
       match /quizAttempts/{a} {
         allow get: if owner(s) || (a.split('__').size() == 2 && self(s,a.split('__')[1]));
@@ -229,9 +230,9 @@ service cloud.firestore {
         allow delete: if false;
         function validAttempt(d) {
           let q=get(/databases/$(database)/documents/shops/$(s)/quizzes/$(d.quizId)).data;
-          return d.keys().hasOnly(['quizId','studentId','classId','choice','status','correct','earned','lastEventId','createdAt','gradedAt'])
+          return d.keys().hasOnly(['quizId','studentId','classId','choice','answerText','status','correct','earned','lastEventId','createdAt','gradedAt'])
             && shortText(d.quizId,50) && shortText(d.studentId,50) && d.classId == q.classId
-            && d.choice is int && d.choice >= 0 && d.choice < q.options.size() && d.correct is bool && d.earned is int && d.lastEventId is string;
+            && d.choice is int && (q.type == 'short' ? (d.choice == 0 && shortText(d.answerText,80) && d.answerText.replace(' ','').size() > 0) : (!('answerText' in d) && d.choice >= 0 && d.choice < q.options.size())) && d.correct is bool && d.earned is int && d.lastEventId is string;
         }
         function validGrade() {
           let d=request.resource.data;
@@ -239,7 +240,7 @@ service cloud.firestore {
           let k=get(/databases/$(database)/documents/shops/$(s)/quizKeys/$(resource.data.quizId)).data;
           return resource.data.status == 'submitted' && d.status == 'graded' && d.gradedAt == request.time
             && d.diff(resource.data).affectedKeys().hasOnly(['status','correct','earned','lastEventId','gradedAt'])
-            && d.correct == (resource.data.choice == k.answerIndex) && d.earned == (d.correct?q.reward:0)
+            && d.correct == (q.type == 'short' ? resource.data.answerText.lower().replace(' ','') == k.answerText.lower().replace(' ','') : resource.data.choice == k.answerIndex) && d.earned == (d.correct?q.reward:0)
             && (d.correct
               ? (d.lastEventId == 'quiz_' + a && freshEvent(s,d.lastEventId)
                 && getAfter(eventPath(s,d.lastEventId)).data.type == 'quiz' && getAfter(eventPath(s,d.lastEventId)).data.refId == a
@@ -264,7 +265,7 @@ service cloud.firestore {
         allow create: if owner(s) && validProduct(request.resource.data) && request.resource.data.lastEventId == '';
         allow update: if validProduct(request.resource.data) && ((owner(s) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','price','stock','art','active'])) || stockChange());
         allow delete: if false;
-        function validProduct(d) { return d.keys().hasOnly(['name','price','stock','art','active','lastEventId']) && shortText(d.name,50) && d.price is int && d.price > 0 && d.price <= 10000 && d.stock is int && d.stock >= 0 && d.stock <= 10000 && d.art is int && d.art >= 0 && d.art <= 3 && d.active is bool && d.lastEventId is string; }
+        function validProduct(d) { return d.keys().hasOnly(['name','price','stock','art','active','lastEventId']) && shortText(d.name,50) && d.price is int && d.price > 0 && d.price <= 10000 && d.stock is int && d.stock >= 0 && d.stock <= 10000 && d.art is int && d.art >= 0 && d.art <= 11 && d.active is bool && d.lastEventId is string; }
         function stockChange() { let d=request.resource.data; let e=getAfter(eventPath(s,d.lastEventId)).data; return signed() && freshEvent(s,d.lastEventId) && d.diff(resource.data).affectedKeys().hasOnly(['stock','lastEventId']) && e.productId == p && ((e.type == 'purchase' && d.stock == resource.data.stock-1) || (e.type == 'refund' && d.stock == resource.data.stock+1)); }
       }
       match /orders/{o} {

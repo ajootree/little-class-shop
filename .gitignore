@@ -13,3 +13,5 @@ dist/assets/*.tmp
 # Local notes and exported files are not part of the app repository.
 /docs/
 /outputs/
+
+.local-*.json
