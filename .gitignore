@@ -9,3 +9,7 @@ dist/app.js.map
 dist/assets/*.tmp
 .env*
 !.env.example
+
+# Local notes and exported files are not part of the app repository.
+/docs/
+/outputs/
