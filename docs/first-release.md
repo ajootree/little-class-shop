@@ -1,5 +1,7 @@
 # 1차 제작 완료 기록 · 2026-11-14
 
+이 문서는 최초 배포 당시의 기록입니다. 이후 학생 직접 가입·비밀번호 인증과 HTTP 리퍼러 제한을 추가했습니다. 현재 과제 조건 확인은 [과제 조건 점검](assignment-checklist.md)을 참고합니다.
+
 웹앱: https://ajootree.github.io/little-class-shop/
 
 소스: https://github.com/ajootree/little-class-shop

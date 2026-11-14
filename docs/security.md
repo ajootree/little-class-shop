@@ -43,6 +43,10 @@
 - CSV 셀의 수식 접두어 방어
 - Analytics/Gemini 부가 기능 사용 안 함, 학생 이메일·전화·사진 수집 안 함
 
+## API 키의 HTTP 리퍼러 제한
+
+2026-11-14 기존 Firebase Browser key에 웹사이트 제한을 저장했습니다. 허용 목록은 `https://ajootree.github.io/*`, `https://class-shop-f0f24.firebaseapp.com/*`, `http://127.0.0.1:8842/*`입니다. 기존 API 25개 제한은 유지했습니다. 실제 배포 주소의 읽기 전용 Firebase 인증 설정 요청은 HTTP 200, 미등록 주소는 HTTP 403 `API_KEY_HTTP_REFERRER_BLOCKED`로 응답하는 것을 확인했습니다. 이 작업에서 약관을 대신 수락하거나 결제·요금제 설정을 변경하지 않았습니다.
+
 ## 검사
 
 `tests/rules.test.mjs`: Firebase 에뮬레이터에서 실제 배포 규칙 파일을 로드합니다. 미인증·타인 조회, 모둠장 범위, 지갑 임의 변경, 중복 적립, 위조 가격, 품절, 주문 단독 생성, 원장 변조·재사용, 환급, 익명 접근·UID 탈취 거부, 비밀번호 필드 저장 거부를 확인합니다.

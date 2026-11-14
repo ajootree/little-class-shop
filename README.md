@@ -9,6 +9,7 @@
 - 학년 + 개인 코드(알파벳 2자리·숫자 4자리) + 비밀번호 로그인
 - 교사의 비밀번호 초기화·새 코드 발급, 학생의 본인 비밀번호 변경
 - 과제 등록, 교사 또는 해당 모둠장의 수행 확인, 포인트 적립·확인 취소
+- 과제 보상·상품 가격 슬라이더, 숫자 직접 입력과 선택값 미리보기
 - 상품 가격·재고·진열 관리, 학생 구매, 교사 보상 지급·취소 및 환급
 - 학생별 포인트 원장, 학급 요약, CSV 내보내기
 - 로그인 없이 조작 가능한 가상 학급 체험. 실제 Firebase 기록과 분리
@@ -53,7 +54,9 @@ Authentication: Google(교사), 이메일/비밀번호 제공업체(학생). 학
 
 GitHub Pages는 `.github/workflows/pages.yml`을 사용합니다. 저장소 Settings → Pages → Source: GitHub Actions로 설정합니다. `main` 업로드 시 기본 검사·빌드 후 `dist/`를 배포합니다. 규칙 배포는 이 워크플로에 포함하지 않으며 Firebase 콘솔 또는 인증된 Firebase CLI에서 별도로 적용합니다.
 
-Firebase 인증 허용 도메인과 웹 API 키 HTTP 리퍼러에 실제 배포 origin을 등록해야 합니다. GitHub Pages는 cross-origin 요청에 경로가 생략될 수 있으므로 `https://ajootree.github.io/*`를 등록합니다. 이 제한이 데이터 접근 권한을 대체하지 않으며 Firestore 규칙을 반드시 함께 배포해야 합니다.
+현재 Firebase 인증 승인 도메인에 `ajootree.github.io`를 등록하고, 웹 API 키의 HTTP 리퍼러를 `https://ajootree.github.io/*`, `https://class-shop-f0f24.firebaseapp.com/*`, `http://127.0.0.1:8842/*`로 제한했습니다. GitHub Pages의 cross-origin 요청은 경로가 생략될 수 있어 배포 도메인 단위로 허용합니다. 이 제한은 데이터 접근 권한을 대체하지 않으며 Firestore 규칙을 함께 적용했습니다. 허용 주소 200·미등록 주소 403 응답을 확인했습니다. 다른 개발 주소를 사용할 때는 해당 주소를 허용하거나 로컬 에뮬레이터로 검사합니다.
+
+과제 필수 조건별 구현 내용과 시연 순서는 [과제 조건 점검](docs/assignment-checklist.md)을 확인하세요.
 
 ## 이미지·글꼴
 
