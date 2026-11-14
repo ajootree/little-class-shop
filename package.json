@@ -1,0 +1,23 @@
+{
+  "name": "little-class-shop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/serve.mjs",
+    "test": "node --test tests/domain.test.mjs",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-class-shop \"node --test --test-concurrency=1 tests/rules.test.mjs\""
+  },
+  "dependencies": {
+    "esbuild": "0.28.2",
+    "firebase": "13.3.0"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "6.0.0",
+    "firebase-tools": "15.36.0"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "1.14.7"
+  }
+}

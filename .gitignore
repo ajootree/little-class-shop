@@ -1,0 +1,11 @@
+node_modules/
+.tools/
+.local/
+.firebase/
+*-debug.log
+*.log
+dist/app.js
+dist/app.js.map
+dist/assets/*.tmp
+.env*
+!.env.example

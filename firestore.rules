@@ -1,0 +1,143 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signed() { return request.auth != null; }
+    function teacherLogin() { return signed() && request.auth.token.firebase.sign_in_provider == 'google.com' && request.auth.token.email_verified == true; }
+    function shopPath(s) { return /databases/$(database)/documents/shops/$(s); }
+    function studentPath(s,p) { return /databases/$(database)/documents/shops/$(s)/students/$(p); }
+    function eventPath(s,e) { return /databases/$(database)/documents/shops/$(s)/events/$(e); }
+    function binding(s) { return get(/databases/$(database)/documents/shops/$(s)/bindings/$(request.auth.uid)).data; }
+    function owner(s) { return signed() && get(shopPath(s)).data.ownerUid == request.auth.uid; }
+    function member(s) { return signed() && exists(/databases/$(database)/documents/shops/$(s)/bindings/$(request.auth.uid)) && get(studentPath(s,binding(s).studentId)).data.authUid == request.auth.uid && get(studentPath(s,binding(s).studentId)).data.active == true; }
+    function self(s,p) { return member(s) && binding(s).studentId == p; }
+    function leader(s,c,g) { return member(s) && get(studentPath(s,binding(s).studentId)).data.isLeader == true && get(studentPath(s,binding(s).studentId)).data.classId == c && get(studentPath(s,binding(s).studentId)).data.groupId == g; }
+    function shortText(t,n) { return t is string && t.size() > 0 && t.size() <= n; }
+    function freshEvent(s,e) { return e is string && !exists(eventPath(s,e)) && getAfter(eventPath(s,e)).data.actorUid == request.auth.uid && getAfter(eventPath(s,e)).data.createdAt == request.time; }
+    function validStudent(d) { return d.keys().hasOnly(['name','number','classId','groupId','isLeader','balance','authUid','lastEventId','active']) && shortText(d.name,24) && d.number is int && d.number > 0 && d.number <= 999 && shortText(d.classId,50) && shortText(d.groupId,30) && d.isLeader is bool && d.balance is int && d.balance >= 0 && d.balance <= 1000000 && d.authUid is string && d.lastEventId is string && d.active is bool; }
+    function joined(s,p) {
+      let b = getAfter(/databases/$(database)/documents/shops/$(s)/bindings/$(request.auth.uid)).data;
+      let i = get(/databases/$(database)/documents/shops/$(s)/invites/$(b.token)).data;
+      return signed() && b.studentId == p && i.active == true && i.studentId == p && i.classId == resource.data.classId && request.resource.data.authUid == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['authUid']) && resource.data.active == true;
+    }
+    function walletChange(s,p) {
+      let d=request.resource.data;
+      let e=getAfter(eventPath(s,d.lastEventId)).data;
+      return freshEvent(s,d.lastEventId) && d.lastEventId != resource.data.lastEventId && e.studentId == p && d.diff(resource.data).affectedKeys().hasOnly(['balance','lastEventId']) && d.balance == resource.data.balance + e.amount && d.balance >= 0;
+    }
+    function walletAfter(s,e,d) {
+      let before=get(studentPath(s,d.studentId)).data;
+      let after=getAfter(studentPath(s,d.studentId)).data;
+      return before.active == true && after.balance == before.balance + d.amount && after.balance >= 0 && after.lastEventId == e;
+    }
+    function mayCheck(s,p,t) {
+      let student=get(studentPath(s,p)).data;
+      return owner(s) || (t.allowLeader == true && leader(s,student.classId,student.groupId) && binding(s).studentId != p);
+    }
+    function awardEvent(s,e,d) {
+      let cp=/databases/$(database)/documents/shops/$(s)/checks/$(d.refId);
+      let c=getAfter(cp).data;
+      let t=get(/databases/$(database)/documents/shops/$(s)/tasks/$(c.taskId)).data;
+      return d.productId == '' && c.studentId == d.studentId && c.lastEventId == e && c.updatedAt == request.time && t.classId == get(studentPath(s,d.studentId)).data.classId && t.active == true && c.reward == t.reward
+        && ((d.type == 'award' && d.amount == t.reward && c.active == true && (!exists(cp) || get(cp).data.active == false) && mayCheck(s,d.studentId,t))
+         || (d.type == 'revoke' && owner(s) && d.amount == -c.reward && c.active == false && get(cp).data.active == true));
+    }
+    function purchaseEvent(s,e,d) {
+      let pp=/databases/$(database)/documents/shops/$(s)/products/$(d.productId);
+      let p=get(pp).data;
+      let o=getAfter(/databases/$(database)/documents/shops/$(s)/orders/$(d.refId)).data;
+      return self(s,d.studentId) && d.refId == e && d.amount == -p.price && p.active == true && p.stock > 0
+        && getAfter(pp).data.stock == p.stock-1 && getAfter(pp).data.lastEventId == e
+        && o.studentId == d.studentId && o.productId == d.productId && o.price == p.price && o.productName == p.name && o.status == 'pending' && o.lastEventId == e;
+    }
+    function refundEvent(s,e,d) {
+      let op=/databases/$(database)/documents/shops/$(s)/orders/$(d.refId);
+      let before=get(op).data;
+      let after=getAfter(op).data;
+      let pp=/databases/$(database)/documents/shops/$(s)/products/$(before.productId);
+      return owner(s) && before.status == 'pending' && after.status == 'cancelled' && after.lastEventId == e && before.studentId == d.studentId && d.amount == before.price && d.productId == before.productId && getAfter(pp).data.stock == get(pp).data.stock+1 && getAfter(pp).data.lastEventId == e;
+    }
+    match /users/{uid}/shops/{s} {
+      allow read: if signed() && request.auth.uid == uid;
+      allow create: if signed() && request.auth.uid == uid && request.resource.data.keys().hasOnly(['shopId']) && request.resource.data.shopId == s && getAfter(shopPath(s)).data.ownerUid == uid;
+      allow update,delete: if false;
+    }
+    match /shops/{s} {
+      allow get: if true;
+      allow list: if owner(s);
+      allow create: if teacherLogin() && request.resource.data.ownerUid == request.auth.uid && request.resource.data.createdAt == request.time && validShop(request.resource.data);
+      allow update: if owner(s) && validShop(request.resource.data) && request.resource.data.ownerUid == resource.data.ownerUid && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false;
+      function validShop(d) { return d.keys().hasOnly(['ownerUid','teacherName','shopName','currencyName','createdAt']) && shortText(d.teacherName,24) && shortText(d.shopName,32) && shortText(d.currencyName,12); }
+      match /classes/{c} {
+        allow get: if owner(s) || (member(s) && binding(s).classId == c);
+        allow list: if owner(s);
+        allow create,update: if owner(s) && request.resource.data.keys().hasOnly(['name']) && shortText(request.resource.data.name,30);
+        allow delete: if false;
+      }
+      match /students/{p} {
+        allow get,list: if owner(s) || self(s,p) || (member(s) && leader(s,resource.data.classId,resource.data.groupId));
+        allow create: if owner(s) && validStudent(request.resource.data) && request.resource.data.balance == 0 && request.resource.data.authUid == '' && request.resource.data.lastEventId == '';
+        allow update: if signed() && validStudent(request.resource.data) && ((owner(s) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','number','groupId','isLeader','active','authUid'])) || joined(s,p) || walletChange(s,p));
+        allow delete: if false;
+      }
+      match /invites/{token} {
+        allow get: if owner(s) || (signed() && resource.data.active == true);
+        allow list: if owner(s);
+        allow create: if owner(s) && token.matches('^[a-f0-9]{32}$') && request.resource.data.keys().hasOnly(['studentId','classId','active','createdAt']) && request.resource.data.active == true && request.resource.data.createdAt == request.time;
+        allow update: if owner(s) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active']) && request.resource.data.active == false;
+        allow delete: if false;
+      }
+      match /bindings/{uid} {
+        allow get: if owner(s) || (signed() && request.auth.uid == uid);
+        allow list: if owner(s);
+        allow create,update: if signed() && request.auth.uid == uid && request.auth.token.firebase.sign_in_provider == 'anonymous' && request.resource.data.keys().hasOnly(['studentId','classId','token'])
+          && get(/databases/$(database)/documents/shops/$(s)/invites/$(request.resource.data.token)).data.active == true
+          && get(/databases/$(database)/documents/shops/$(s)/invites/$(request.resource.data.token)).data.studentId == request.resource.data.studentId
+          && get(/databases/$(database)/documents/shops/$(s)/invites/$(request.resource.data.token)).data.classId == request.resource.data.classId
+          && getAfter(studentPath(s,request.resource.data.studentId)).data.authUid == uid && getAfter(studentPath(s,request.resource.data.studentId)).data.active == true;
+        allow delete: if false;
+      }
+      match /tasks/{t} {
+        allow get,list: if owner(s) || (member(s) && resource.data.classId == binding(s).classId && resource.data.active == true);
+        allow create: if owner(s) && validTask(request.resource.data) && request.resource.data.createdAt == request.time;
+        allow update: if owner(s) && validTask(request.resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title','allowLeader','active']);
+        allow delete: if false;
+        function validTask(d) { return d.keys().hasOnly(['title','classId','reward','allowLeader','active','createdAt']) && shortText(d.title,100) && d.classId is string && d.reward is int && d.reward > 0 && d.reward <= 1000 && d.allowLeader is bool && d.active is bool; }
+      }
+      match /checks/{c} {
+        allow get: if owner(s) || (c.split('__').size() == 2 && (self(s,c.split('__')[1]) || (member(s) && leader(s,get(studentPath(s,c.split('__')[1])).data.classId,get(studentPath(s,c.split('__')[1])).data.groupId))));
+        allow list: if owner(s) || self(s,resource.data.studentId) || (member(s) && leader(s,resource.data.classId,get(studentPath(s,resource.data.studentId)).data.groupId));
+        allow create,update: if signed() && request.resource.data.keys().hasOnly(['taskId','studentId','classId','reward','active','lastEventId','updatedAt'])
+          && c == request.resource.data.taskId + '__' + request.resource.data.studentId
+          && request.resource.data.classId == get(studentPath(s,request.resource.data.studentId)).data.classId
+          && freshEvent(s,request.resource.data.lastEventId)
+          && getAfter(eventPath(s,request.resource.data.lastEventId)).data.refId == c
+          && getAfter(eventPath(s,request.resource.data.lastEventId)).data.studentId == request.resource.data.studentId
+          && getAfter(eventPath(s,request.resource.data.lastEventId)).data.type in ['award','revoke'];
+        allow delete: if false;
+      }
+      match /products/{p} {
+        allow get,list: if owner(s) || (member(s) && resource.data.active == true);
+        allow create: if owner(s) && validProduct(request.resource.data) && request.resource.data.lastEventId == '';
+        allow update: if validProduct(request.resource.data) && ((owner(s) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','price','stock','art','active'])) || stockChange());
+        allow delete: if false;
+        function validProduct(d) { return d.keys().hasOnly(['name','price','stock','art','active','lastEventId']) && shortText(d.name,50) && d.price is int && d.price > 0 && d.price <= 10000 && d.stock is int && d.stock >= 0 && d.stock <= 10000 && d.art is int && d.art >= 0 && d.art <= 3 && d.active is bool && d.lastEventId is string; }
+        function stockChange() { let d=request.resource.data; let e=getAfter(eventPath(s,d.lastEventId)).data; return signed() && freshEvent(s,d.lastEventId) && d.diff(resource.data).affectedKeys().hasOnly(['stock','lastEventId']) && e.productId == p && ((e.type == 'purchase' && d.stock == resource.data.stock-1) || (e.type == 'refund' && d.stock == resource.data.stock+1)); }
+      }
+      match /orders/{o} {
+        allow get,list: if owner(s) || self(s,resource.data.studentId);
+        allow create: if signed() && validOrder(request.resource.data) && request.resource.data.status == 'pending' && request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time && freshEvent(s,o) && request.resource.data.lastEventId == o && getAfter(eventPath(s,o)).data.type == 'purchase' && getAfter(eventPath(s,o)).data.refId == o;
+        allow update: if owner(s) && validOrder(request.resource.data) && resource.data.status == 'pending' && ((request.resource.data.status == 'delivered' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt']) && request.resource.data.updatedAt == request.time) || (request.resource.data.status == 'cancelled' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt','lastEventId']) && freshEvent(s,request.resource.data.lastEventId) && getAfter(eventPath(s,request.resource.data.lastEventId)).data.type == 'refund' && getAfter(eventPath(s,request.resource.data.lastEventId)).data.refId == o));
+        allow delete: if false;
+        function validOrder(d) { return d.keys().hasOnly(['studentId','classId','productId','productName','price','status','lastEventId','createdAt','updatedAt']) && shortText(d.studentId,50) && shortText(d.productId,50) && shortText(d.productName,50) && d.price is int && d.price > 0 && d.classId == get(studentPath(s,d.studentId)).data.classId && d.status in ['pending','delivered','cancelled']; }
+      }
+      match /events/{e} {
+        allow get,list: if owner(s) || self(s,resource.data.studentId);
+        allow create: if signed() && request.resource.data.keys().hasOnly(['type','studentId','amount','refId','productId','actorUid','createdAt','note']) && request.resource.data.actorUid == request.auth.uid && request.resource.data.createdAt == request.time && request.resource.data.amount is int && request.resource.data.amount != 0 && request.resource.data.note is string && request.resource.data.note.size() <= 120 && walletAfter(s,e,request.resource.data)
+          && ((request.resource.data.type in ['award','revoke'] && awardEvent(s,e,request.resource.data)) || (request.resource.data.type == 'purchase' && purchaseEvent(s,e,request.resource.data)) || (request.resource.data.type == 'refund' && refundEvent(s,e,request.resource.data)) || (request.resource.data.type == 'adjust' && owner(s) && request.resource.data.refId == '' && request.resource.data.productId == '' && request.resource.data.amount >= -10000 && request.resource.data.amount <= 10000));
+        allow update,delete: if false;
+      }
+    }
+    match /{document=**} { allow read,write: if false; }
+  }
+}
