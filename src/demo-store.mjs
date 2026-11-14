@@ -1,6 +1,6 @@
 import {demoSeed,uid,text,integer,checkedBalance,purchaseBalance} from './domain.mjs';
 import {createLoginCode,schoolGrade} from './student-login.mjs';
-const key='little-class-shop-demo-v2';
+const key='little-class-shop-demo-v3';
 export class DemoStore{
   constructor(){try{this.data=JSON.parse(sessionStorage.getItem(key))||demoSeed();}catch{this.data=demoSeed();}this.shopId='demo';}
   save(){sessionStorage.setItem(key,JSON.stringify(this.data));}

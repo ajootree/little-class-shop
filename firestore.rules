@@ -20,15 +20,18 @@ service cloud.firestore {
     function lookupKey(g,c) { return string(g) + '-' + c; }
     function applicationPath(u) { return /databases/$(database)/documents/studentApplications/$(u); }
     function loginPath(g,c) { return /databases/$(database)/documents/studentLogins/$(lookupKey(g,c)); }
+    function namePath(k) { return /databases/$(database)/documents/studentNames/$(k); }
+    function nameHash(c,n) { return hashing.sha256(c + ':' + n.lower().replace(' ', '')).toHexString().lower(); }
     function sameLogin(a,b) { return a.shopId == b.shopId && a.classId == b.classId && a.grade == b.grade && a.code == b.code && a.token == b.token && a.studentId == b.studentId; }
     function validApplication(u,d) {
       let c=get(/databases/$(database)/documents/shops/$(d.shopId)/classes/$(d.classId)).data;
       let i=getAfter(loginPath(d.grade,d.code)).data;
       return passwordLogin() && request.auth.uid == u && request.auth.token.email == d.token + '@students.class-shop.invalid'
-        && d.keys().hasOnly(['shopId','classId','grade','code','token','name','classCode','kind','studentId','status','createdAt'])
+        && d.keys().hasOnly(['shopId','classId','grade','code','token','name','nameKey','classCode','kind','studentId','status','createdAt'])
         && grade(d.grade) && code(d.code) && d.token.matches('^[a-f0-9]{32}$') && d.status == 'pending' && d.createdAt == request.time
         && c.grade == d.grade && sameLogin(d,i)
-        && ((d.kind == 'signup' && d.studentId == u && shortText(d.name,24) && code(d.classCode) && c.joinCode == d.classCode
+        && ((d.kind == 'signup' && d.studentId == u && shortText(d.name,24) && d.nameKey == nameHash(d.classId,d.name)
+            && sameLogin(d,getAfter(namePath(d.nameKey)).data) && getAfter(namePath(d.nameKey)).data.active == true && code(d.classCode) && c.joinCode == d.classCode
             && !exists(studentPath(d.shopId,u)))
           || (d.kind == 'recover' && d.name == '' && d.classCode == '' && recoveryInvite(d)));
     }
@@ -89,6 +92,29 @@ service cloud.firestore {
         && getAfter(/databases/$(database)/documents/shops/$(request.resource.data.shopId)/classes/$(request.resource.data.classId)).data.grade == request.resource.data.grade
         && getAfter(/databases/$(database)/documents/shops/$(request.resource.data.shopId)/classes/$(request.resource.data.classId)).data.joinCode == request.resource.data.code;
       allow update,delete: if false;
+    }
+    match /classCodes/{key} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if owner(request.resource.data.shopId) && request.resource.data.keys().hasOnly(['shopId','classId','grade','code'])
+        && code(key) && request.resource.data.code == key && grade(request.resource.data.grade)
+        && getAfter(/databases/$(database)/documents/shops/$(request.resource.data.shopId)/classes/$(request.resource.data.classId)).data.joinCode == key
+        && getAfter(/databases/$(database)/documents/shops/$(request.resource.data.shopId)/classes/$(request.resource.data.classId)).data.grade == request.resource.data.grade;
+      allow update,delete: if false;
+    }
+    match /studentNames/{key} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if validNameIndex(request.resource.data) && (signupAlias(request.resource.data) || ownerAlias(request.resource.data));
+      allow update: if validNameIndex(request.resource.data)
+        && ((resource.data.active == false && signupAlias(request.resource.data))
+         || (owner(resource.data.shopId) && request.resource.data.shopId == resource.data.shopId
+          && ((request.resource.data.active == false && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active']))
+            || ((resource.data.active == false || request.resource.data.studentId == resource.data.studentId) && ownerAlias(request.resource.data)))));
+      allow delete: if false;
+      function validNameIndex(d) { return d.keys().hasOnly(['shopId','classId','grade','code','token','studentId','active']) && d.active is bool && grade(d.grade) && code(d.code) && d.token.matches('^[a-f0-9]{32}$'); }
+      function signupAlias(d) { let a=getAfter(applicationPath(request.auth.uid)).data;return passwordLogin() && d.active == true && a.kind == 'signup' && a.status == 'pending' && a.nameKey == key && key == nameHash(a.classId,a.name) && sameLogin(d,a); }
+      function ownerAlias(d) { let p=getAfter(studentPath(d.shopId,d.studentId)).data;let i=getAfter(/databases/$(database)/documents/shops/$(d.shopId)/invites/$(d.token)).data;return owner(d.shopId) && d.active == true && key == nameHash(d.classId,p.name) && p.classId == d.classId && i.active == true && i.studentId == d.studentId && i.classId == d.classId && i.grade == d.grade && i.code == d.code; }
     }
     match /studentLogins/{key} {
       allow get: if true;

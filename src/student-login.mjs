@@ -16,3 +16,5 @@ export function validateNewPassword(password,confirmation){
   return password;
 }
 export const isTeacher=user=>!!user?.providerData?.some(p=>p.providerId==='google.com');
+export function studentName(value){const name=String(value??'').normalize('NFKC').trim().replace(/\s+/g,' ');if(!name||name.length>24)throw new Error('내 이름은 1~24자로 입력해 주세요.');return name;}
+export async function studentNameKey(classId,name){const canonical=studentName(name).toLowerCase().replace(/\s/g,'');const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(classId+':'+canonical));return Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');}

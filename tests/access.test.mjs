@@ -6,7 +6,7 @@ import {GoogleAuthProvider,signInWithCredential,signOut,signInWithEmailAndPasswo
 import {doc,getDoc,getDocs,collection,writeBatch,setDoc,updateDoc,serverTimestamp,setLogLevel} from 'firebase/firestore';
 import {initializeTestEnvironment,assertFails} from '@firebase/rules-unit-testing';
 import {FirebaseStore} from '../src/firebase-store.mjs';
-import {studentEmail,loginKey} from '../src/student-login.mjs';
+import {studentEmail,loginKey,studentNameKey} from '../src/student-login.mjs';
 
 const projectId='demo-class-shop',password='our-science-class-2026',newPassword='new-science-class-2026';
 let env,teacher,classId,classCode,stores=[];
@@ -34,8 +34,8 @@ test('직접 가입은 승인 전 명단·과제·상점 접근을 차단하고 
  await s.logout();await s.join({grade:4,code:r.code.toLowerCase(),password});assert.equal((await s.load({owner:false})).students[0].name,'지우');
 });
 
-test('동명이인도 서로 다른 개인 코드를 가지며 타인의 기록·가입 신청을 읽지 못한다',async()=>{
- const a=await signup('지우'),b=await signup('지우');assert.notEqual(a.r.code,b.r.code);await approve(a.s);await approve(b.s);
+test('같은 학급의 중복 이름은 차단하고 구분한 이름은 각자 기록만 읽는다',async()=>{
+ const a=await signup('지우');await assert.rejects(()=>signup('지 우'),/이미 등록된 이름/);const b=await signup('지우2');assert.notEqual(a.r.code,b.r.code);await approve(a.s);await approve(b.s);
  await assertFails(getDoc(a.s.ref('students',b.r.studentId)));await assertFails(getDoc(a.s.global('studentApplications',b.s.auth.currentUser.uid)));
  const rows=await teacher.applications();assert.equal(rows.length,2);assert.ok(rows.every(a=>!('password' in a)&&!('passwordHash' in a)));
 });
@@ -58,7 +58,7 @@ test('비밀번호 오류는 로그인 실패, 본인 변경은 기존 비밀번
 test('교사 초기화는 이전 세션을 차단하고 재승인 후 포인트·수행·구매 기록을 보존한다',async()=>{
  const {s,r}=await signup('서연');await approve(s);
  const taskId=await teacher.addTask({classId,title:'실험관찰',reward:5,allowLeader:false});await teacher.confirm(taskId,r.studentId,true);
- await teacher.adjust(r.studentId,20,'검증 포인트');const products=await teacher.rows('products');await s.purchase(r.studentId,products[0].id);
+ await teacher.adjust(r.studentId,20,'검증 포인트');const products=await teacher.rows('products');await s.purchase(r.studentId,products.find(p=>p.name==='랜덤 지우개').id);
  const before=(await getDoc(teacher.ref('students',r.studentId))).data();const oldUid=s.auth.currentUser.uid;
  const code=await teacher.reissue(r.studentId);await assertFails(getDoc(s.ref('students',r.studentId)));
  const recovery=store(),result=await recovery.join({grade:4,code,password:newPassword,passwordConfirm:newPassword,mode:'recover'});
@@ -95,4 +95,33 @@ test('새로 초기화한 뒤 이전 코드의 재설정 신청을 승인할 수
  const {s,r}=await signup();await approve(s);const code=await teacher.reissue(r.studentId);const recovering=store();await recovering.join({grade:4,code,password:newPassword,passwordConfirm:newPassword,mode:'recover'});
  await teacher.reissue(r.studentId);await assert.rejects(()=>teacher.approveApplication(recovering.auth.currentUser.uid));
  assert.equal((await getDoc(teacher.ref('students',r.studentId))).data().authUid,'');await assertFails(getDoc(recovering.ref('students',r.studentId)));
+});
+
+test('학급 코드·이름·비밀번호 로그인은 공백·대소문자를 정규화하고 잘못된 이름은 거부한다',async()=>{
+ const {s}=await signup('Hong Gil Dong');await approve(s);await s.logout();
+ await s.join({classCode:classCode.toLowerCase(),name:' honggildong ',password});assert.equal((await s.finishJoin()).pending,false);
+ await s.logout();await assert.rejects(()=>s.join({classCode,name:'다른 이름',password}));
+});
+
+test('이름 기반 초기화는 같은 학급 코드와 이름으로 재승인하고 기록을 유지한다',async()=>{
+ const {s,r}=await signup('홍길동');await approve(s);await teacher.adjust(r.studentId,30,'보존 확인');await teacher.reissue(r.studentId);
+ const recovery=store();await recovery.join({classCode,name:'홍길동',password:newPassword,mode:'recover'});await approve(recovery);
+ assert.equal((await recovery.load({owner:false})).students[0].balance,30);await recovery.logout();await recovery.join({classCode,name:'홍길동',password:newPassword});assert.equal((await recovery.finishJoin()).pending,false);
+});
+
+test('교사의 이름 변경은 로그인 이름만 교체하고 비밀번호·학생 기록을 유지한다',async()=>{
+ const {s,r}=await signup('김학생');await approve(s);await teacher.adjust(r.studentId,20,'기록 보존');
+ await teacher.editStudent(r.studentId,{name:'김학생2',groupId:'1모둠',isLeader:false,active:true});await s.logout();
+ await assert.rejects(()=>s.join({classCode,name:'김학생',password}));await s.join({classCode,name:'김학생2',password});assert.equal((await s.load({owner:false})).students[0].balance,20);
+});
+
+test('반려한 신청 이름은 다시 신청할 수 있고 활성 로그인 연결은 학생이 변조할 수 없다',async()=>{
+ const a=await signup('학생');await teacher.rejectApplication(a.s.auth.currentUser.uid);const b=await signup('학생');await approve(b.s);
+ const key=await studentNameKey(classId,'학생'),ref=b.s.global('studentNames',key);await assertFails(updateDoc(ref,{token:'a'.repeat(32)}));await assertFails(updateDoc(ref,{active:false}));
+ await assertFails(getDocs(collection(b.s.db,'studentNames')));const index=(await getDoc(ref)).data();assert.ok(!('name' in index)&&!('password' in index));
+});
+
+test('서로 다른 학급에서는 같은 이름으로 가입할 수 있다',async()=>{
+ const first=await signup('홍길동');await approve(first.s);const secondClass=await teacher.addClass('5학년 1반',5),c=(await getDoc(teacher.ref('classes',secondClass))).data();
+ const second=store();await second.register({classCode:c.joinCode,name:'홍길동',password});await approve(second);await second.logout();await second.join({classCode:c.joinCode,name:'홍길동',password});assert.equal((await second.load({owner:false})).classes[0].id,secondClass);
 });

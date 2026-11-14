@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "node scripts/serve.mjs",
-    "test": "node --test tests/domain.test.mjs",
+    "test": "node --test tests/domain.test.mjs tests/login-preferences.test.mjs",
     "test:rules": "firebase emulators:exec --only firestore,auth --project demo-class-shop \"node --test --test-concurrency=1 tests/rules.test.mjs tests/access.test.mjs\""
   },
   "dependencies": {
