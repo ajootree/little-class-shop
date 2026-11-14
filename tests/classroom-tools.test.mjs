@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {LessonTimer,clockText,timerDuration,shuffled} from '../src/classroom-tools.mjs';
+import {DemoStore} from '../src/demo-store.mjs';
+
+test('타이머는 틱 횟수 대신 실제 경과 시간으로 끝나고 완료 알림은 한 번 발생',()=>{let now=0;const t=new LessonTimer({now:()=>now});t.set(5000);t.start();now=4700;t.tick();assert.equal(clockText(t.remaining),'00:01');now=12000;assert.equal(t.tick(),true);assert.equal(t.remaining,0);assert.equal(t.tick(),false);});
+test('일시정지는 남은 시간을 보존하고 재개·초기화가 올바르게 동작',()=>{let now=0;const t=new LessonTimer({now:()=>now});t.set(60000);t.start();now=10000;t.pause();now=40000;t.start();assert.equal(t.remaining,50000);now=50000;t.tick();assert.equal(t.remaining,40000);t.reset();assert.equal(t.remaining,60000);assert.equal(t.status,'ready');});
+test('새로고침으로 복원한 타이머도 경과 시간을 반영하고 저장 객체로 메서드를 덮지 않음',()=>{let saved='',now=0;const storage={getItem:()=>saved,setItem:(k,v)=>saved=v};const t=new LessonTimer({now:()=>now,storage});t.set(5000);t.start();now=3000;const restored=new LessonTimer({now:()=>now,storage});assert.equal(restored.remaining,2000);saved=JSON.stringify({...JSON.parse(saved),now:'bad',tick:'bad'});const safe=new LessonTimer({now:()=>now,storage});assert.equal(typeof safe.tick,'function');assert.equal(safe.remaining,2000);});
+test('타이머 시간 범위 검증 및 빈 명단·동명이인 ID를 보존하는 중복 없는 추첨',()=>{assert.equal(timerDuration(0,5),5000);assert.throws(()=>timerDuration(0,0));assert.throws(()=>timerDuration(180,1));const entries=[{id:1,name:'학생'},{id:2,name:'학생'},{id:3,name:'학생3'}],result=shuffled(entries,()=>0);assert.equal(new Set(result.map(v=>v.id)).size,3);assert.deepEqual(entries.map(v=>v.id),[1,2,3]);assert.deepEqual(shuffled([]),[]);assert.deepEqual(shuffled([1]),[1]);});
+test('체험 퀴즈도 정답 한 번 적립·오답 0점·재시도 차단을 지원',async()=>{globalThis.sessionStorage={getItem:()=>null,setItem:()=>{}};const s=new DemoStore();assert.equal((await s.submitQuiz('q1','s0',0)).earned,10);assert.equal(s.data.students[0].balance,45);await assert.rejects(s.submitQuiz('q1','s0',0),/이미 제출/);assert.equal((await s.submitQuiz('q2','s0',0)).earned,0);assert.equal(s.data.students[0].balance,45);});

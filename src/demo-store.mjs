@@ -1,8 +1,9 @@
 import {demoSeed,uid,text,integer,checkedBalance,purchaseBalance} from './domain.mjs';
 import {createLoginCode,schoolGrade} from './student-login.mjs';
+import {quizInput,quizAttemptId} from './quiz.mjs';
 const key='little-class-shop-demo-v3';
 export class DemoStore{
-  constructor(){try{this.data=JSON.parse(sessionStorage.getItem(key))||demoSeed();}catch{this.data=demoSeed();}this.shopId='demo';}
+  constructor(){try{this.data=JSON.parse(sessionStorage.getItem(key))||demoSeed();}catch{this.data=demoSeed();}this.shopId='demo';if(!this.data.quizzes){const seed=demoSeed();this.data.quizzes=seed.quizzes;this.data.quizKeys=seed.quizKeys;}this.data.quizAttempts??=[];}
   save(){sessionStorage.setItem(key,JSON.stringify(this.data));}
   async load(){return structuredClone(this.data);}
   async open(){return this.data.shop;}
@@ -24,6 +25,11 @@ export class DemoStore{
   async purchase(studentId,productId){const s=this.data.students.find(s=>s.id===studentId),p=this.data.products.find(p=>p.id===productId);s.balance=purchaseBalance(s,p);p.stock--;this.data.orders.push({id:uid(),studentId,classId:s.classId,productId,productName:p.name,price:p.price,status:'pending',createdAt:Date.now()});this.event('purchase',studentId,-p.price,p.name);this.save();}
   async deliver(id){this.data.orders.find(o=>o.id===id).status='delivered';this.save();}
   async refund(id){const o=this.data.orders.find(o=>o.id===id);if(o.status!=='pending')throw new Error('이미 처리한 주문이에요.');const s=this.data.students.find(s=>s.id===o.studentId),p=this.data.products.find(p=>p.id===o.productId);s.balance=checkedBalance(s.balance,o.price);p.stock++;o.status='cancelled';this.event('refund',s.id,o.price,p.name);this.save();}
+  async addQuiz(input){const {answerIndex,...q}=quizInput(input),id=uid();this.data.quizzes.push({...q,id,active:true,createdAt:Date.now()});this.data.quizKeys.push({id,answerIndex});this.save();return id;}
+  async setQuizActive(id,active){this.data.quizzes.find(q=>q.id===id).active=!!active;this.save();}
+  async submitQuiz(quizId,studentId,choice){const q=this.data.quizzes.find(q=>q.id===quizId),s=this.data.students.find(s=>s.id===studentId),id=quizAttemptId(quizId,studentId);if(this.data.quizAttempts.some(a=>a.id===id))throw new Error('이미 제출한 퀴즈예요. 답은 바꿀 수 없어요.');if(!q?.active||!s?.active||q.classId!==s.classId)throw new Error('참여할 수 없는 퀴즈예요.');choice=integer(choice,'답',0,q.options.length-1);this.data.quizAttempts.push({id,quizId,studentId,classId:q.classId,choice,status:'submitted',correct:false,earned:0,lastEventId:'',createdAt:Date.now(),gradedAt:null});this.save();return this.finishQuiz(id);}
+  async finishQuiz(id){const a=this.data.quizAttempts.find(a=>a.id===id);if(a.status==='graded')return {correct:a.correct,earned:a.earned};const q=this.data.quizzes.find(q=>q.id===a.quizId),key=this.data.quizKeys.find(k=>k.id===a.quizId),s=this.data.students.find(s=>s.id===a.studentId),correct=a.choice===key.answerIndex,earned=correct?q.reward:0;if(correct){s.balance=checkedBalance(s.balance,earned);a.lastEventId=this.event('quiz',s.id,earned,q.question.slice(0,120));}Object.assign(a,{correct,earned,status:'graded',gradedAt:Date.now()});this.save();return {correct,earned};}
+  async finishPendingQuizzes(quizId){let count=0;for(const a of this.data.quizAttempts.filter(a=>a.quizId===quizId&&a.status==='submitted')){await this.finishQuiz(a.id);count++;}return count;}
   async saveShop(input){Object.assign(this.data.shop,input);this.save();}
   subscribe(){return ()=>{};}
 }
