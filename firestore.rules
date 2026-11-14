@@ -8,16 +8,34 @@ service cloud.firestore {
     function eventPath(s,e) { return /databases/$(database)/documents/shops/$(s)/events/$(e); }
     function binding(s) { return get(/databases/$(database)/documents/shops/$(s)/bindings/$(request.auth.uid)).data; }
     function owner(s) { return signed() && get(shopPath(s)).data.ownerUid == request.auth.uid; }
-    function member(s) { return signed() && exists(/databases/$(database)/documents/shops/$(s)/bindings/$(request.auth.uid)) && get(studentPath(s,binding(s).studentId)).data.authUid == request.auth.uid && get(studentPath(s,binding(s).studentId)).data.active == true; }
+    function passwordLogin() { return signed() && request.auth.token.firebase.sign_in_provider == 'password'; }
+    function member(s) { return passwordLogin() && exists(/databases/$(database)/documents/shops/$(s)/bindings/$(request.auth.uid)) && get(studentPath(s,binding(s).studentId)).data.authUid == request.auth.uid && get(studentPath(s,binding(s).studentId)).data.active == true; }
     function self(s,p) { return member(s) && binding(s).studentId == p; }
     function leader(s,c,g) { return member(s) && get(studentPath(s,binding(s).studentId)).data.isLeader == true && get(studentPath(s,binding(s).studentId)).data.classId == c && get(studentPath(s,binding(s).studentId)).data.groupId == g; }
     function shortText(t,n) { return t is string && t.size() > 0 && t.size() <= n; }
     function freshEvent(s,e) { return e is string && !exists(eventPath(s,e)) && getAfter(eventPath(s,e)).data.actorUid == request.auth.uid && getAfter(eventPath(s,e)).data.createdAt == request.time; }
-    function validStudent(d) { return d.keys().hasOnly(['name','number','classId','groupId','isLeader','balance','authUid','lastEventId','active']) && shortText(d.name,24) && d.number is int && d.number > 0 && d.number <= 999 && shortText(d.classId,50) && shortText(d.groupId,30) && d.isLeader is bool && d.balance is int && d.balance >= 0 && d.balance <= 1000000 && d.authUid is string && d.lastEventId is string && d.active is bool; }
-    function joined(s,p) {
-      let b = getAfter(/databases/$(database)/documents/shops/$(s)/bindings/$(request.auth.uid)).data;
-      let i = get(/databases/$(database)/documents/shops/$(s)/invites/$(b.token)).data;
-      return signed() && b.studentId == p && i.active == true && i.studentId == p && i.classId == resource.data.classId && request.resource.data.authUid == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['authUid']) && resource.data.active == true;
+    function validStudent(d) { return d.keys().hasOnly(['name','number','classId','groupId','isLeader','balance','authUid','loginVersion','lastEventId','active']) && (!('loginVersion' in d) || d.loginVersion == 4) && shortText(d.name,24) && d.number is int && d.number > 0 && d.number <= 999 && shortText(d.classId,50) && shortText(d.groupId,30) && d.isLeader is bool && d.balance is int && d.balance >= 0 && d.balance <= 1000000 && d.authUid is string && d.lastEventId is string && d.active is bool; }
+    function grade(g) { return g is int && g >= 1 && g <= 6; }
+    function code(c) { return c is string && c.matches('^[A-Z]{2}[0-9]{4}$'); }
+    function lookupKey(g,c) { return string(g) + '-' + c; }
+    function applicationPath(u) { return /databases/$(database)/documents/studentApplications/$(u); }
+    function loginPath(g,c) { return /databases/$(database)/documents/studentLogins/$(lookupKey(g,c)); }
+    function sameLogin(a,b) { return a.shopId == b.shopId && a.classId == b.classId && a.grade == b.grade && a.code == b.code && a.token == b.token && a.studentId == b.studentId; }
+    function validApplication(u,d) {
+      let c=get(/databases/$(database)/documents/shops/$(d.shopId)/classes/$(d.classId)).data;
+      let i=getAfter(loginPath(d.grade,d.code)).data;
+      return passwordLogin() && request.auth.uid == u && request.auth.token.email == d.token + '@students.class-shop.invalid'
+        && d.keys().hasOnly(['shopId','classId','grade','code','token','name','classCode','kind','studentId','status','createdAt'])
+        && grade(d.grade) && code(d.code) && d.token.matches('^[a-f0-9]{32}$') && d.status == 'pending' && d.createdAt == request.time
+        && c.grade == d.grade && sameLogin(d,i)
+        && ((d.kind == 'signup' && d.studentId == u && shortText(d.name,24) && code(d.classCode) && c.joinCode == d.classCode
+            && !exists(studentPath(d.shopId,u)))
+          || (d.kind == 'recover' && d.name == '' && d.classCode == '' && recoveryInvite(d)));
+    }
+    function recoveryInvite(d) {
+      let i=get(/databases/$(database)/documents/shops/$(d.shopId)/invites/$(d.token)).data;
+      let p=get(studentPath(d.shopId,d.studentId)).data;
+      return i.active == true && i.studentId == d.studentId && i.classId == d.classId && i.grade == d.grade && i.code == d.code && p.authUid == '' && p.active == true;
     }
     function walletChange(s,p) {
       let d=request.resource.data;
@@ -61,6 +79,39 @@ service cloud.firestore {
       allow create: if signed() && request.auth.uid == uid && request.resource.data.keys().hasOnly(['shopId']) && request.resource.data.shopId == s && getAfter(shopPath(s)).data.ownerUid == uid;
       allow update,delete: if false;
     }
+    // Short codes are identifiers, never authorization. Public lookups expose
+    // routing only; names, applications and classroom records remain private.
+    match /classEntrances/{key} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if owner(request.resource.data.shopId) && request.resource.data.keys().hasOnly(['shopId','classId','grade','code'])
+        && grade(request.resource.data.grade) && code(request.resource.data.code) && key == lookupKey(request.resource.data.grade,request.resource.data.code)
+        && getAfter(/databases/$(database)/documents/shops/$(request.resource.data.shopId)/classes/$(request.resource.data.classId)).data.grade == request.resource.data.grade
+        && getAfter(/databases/$(database)/documents/shops/$(request.resource.data.shopId)/classes/$(request.resource.data.classId)).data.joinCode == request.resource.data.code;
+      allow update,delete: if false;
+    }
+    match /studentLogins/{key} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if request.resource.data.keys().hasOnly(['shopId','classId','grade','code','token','studentId'])
+        && grade(request.resource.data.grade) && code(request.resource.data.code) && request.resource.data.token.matches('^[a-f0-9]{32}$')
+        && key == lookupKey(request.resource.data.grade,request.resource.data.code)
+        && ((owner(request.resource.data.shopId) && recoveryInviteAfter(request.resource.data))
+         || (passwordLogin() && request.resource.data.studentId == request.auth.uid && sameLogin(request.resource.data,getAfter(applicationPath(request.auth.uid)).data)));
+      allow update,delete: if false;
+      function recoveryInviteAfter(d) { let i=getAfter(/databases/$(database)/documents/shops/$(d.shopId)/invites/$(d.token)).data;return i.active == true && i.studentId == d.studentId && i.classId == d.classId && i.code == d.code && i.grade == d.grade; }
+    }
+    match /studentApplications/{u} {
+      allow get: if (signed() && request.auth.uid == u) || owner(resource.data.shopId);
+      allow list: if owner(resource.data.shopId);
+      allow create: if validApplication(u,request.resource.data);
+      allow update: if owner(resource.data.shopId) && resource.data.status == 'pending'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','resolvedAt']) && request.resource.data.resolvedAt == request.time
+        && (request.resource.data.status == 'rejected' || (request.resource.data.status == 'approved'
+          && getAfter(studentPath(resource.data.shopId,resource.data.studentId)).data.authUid == u
+          && getAfter(/databases/$(database)/documents/shops/$(resource.data.shopId)/bindings/$(u)).data.token == resource.data.token));
+      allow delete: if false;
+    }
     match /shops/{s} {
       allow get: if true;
       allow list: if owner(s);
@@ -71,29 +122,34 @@ service cloud.firestore {
       match /classes/{c} {
         allow get: if owner(s) || (member(s) && binding(s).classId == c);
         allow list: if owner(s);
-        allow create,update: if owner(s) && request.resource.data.keys().hasOnly(['name']) && shortText(request.resource.data.name,30);
+        allow create,update: if owner(s) && request.resource.data.keys().hasOnly(['name','grade','joinCode','nextNumber']) && shortText(request.resource.data.name,30)
+          && (!('grade' in request.resource.data) || (grade(request.resource.data.grade) && code(request.resource.data.joinCode) && request.resource.data.nextNumber is int && request.resource.data.nextNumber >= 0 && request.resource.data.nextNumber <= 999));
         allow delete: if false;
       }
       match /students/{p} {
         allow get,list: if owner(s) || self(s,p) || (member(s) && leader(s,resource.data.classId,resource.data.groupId));
-        allow create: if owner(s) && validStudent(request.resource.data) && request.resource.data.balance == 0 && request.resource.data.authUid == '' && request.resource.data.lastEventId == '';
-        allow update: if signed() && validStudent(request.resource.data) && ((owner(s) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','number','groupId','isLeader','active','authUid'])) || joined(s,p) || walletChange(s,p));
+        allow create: if owner(s) && validStudent(request.resource.data) && request.resource.data.balance == 0 && request.resource.data.lastEventId == ''
+          && (request.resource.data.authUid == '' || (getAfter(applicationPath(request.resource.data.authUid)).data.status == 'approved' && getAfter(applicationPath(request.resource.data.authUid)).data.studentId == p));
+        allow update: if signed() && validStudent(request.resource.data) && ((owner(s) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','number','groupId','isLeader','active','authUid','loginVersion'])) || walletChange(s,p));
         allow delete: if false;
       }
       match /invites/{token} {
-        allow get: if owner(s) || (signed() && resource.data.active == true);
+        allow get: if owner(s) || (passwordLogin() && request.auth.token.email == token + '@students.class-shop.invalid' && resource.data.active == true);
         allow list: if owner(s);
-        allow create: if owner(s) && token.matches('^[a-f0-9]{32}$') && request.resource.data.keys().hasOnly(['studentId','classId','active','createdAt']) && request.resource.data.active == true && request.resource.data.createdAt == request.time;
+        allow create: if owner(s) && token.matches('^[a-f0-9]{32}$') && request.resource.data.keys().hasOnly(['studentId','classId','grade','code','active','createdAt']) && request.resource.data.active == true && request.resource.data.createdAt == request.time
+          && grade(request.resource.data.grade) && code(request.resource.data.code);
         allow update: if owner(s) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active']) && request.resource.data.active == false;
         allow delete: if false;
       }
       match /bindings/{uid} {
         allow get: if owner(s) || (signed() && request.auth.uid == uid);
         allow list: if owner(s);
-        allow create,update: if signed() && request.auth.uid == uid && request.auth.token.firebase.sign_in_provider == 'anonymous' && request.resource.data.keys().hasOnly(['studentId','classId','token'])
-          && get(/databases/$(database)/documents/shops/$(s)/invites/$(request.resource.data.token)).data.active == true
-          && get(/databases/$(database)/documents/shops/$(s)/invites/$(request.resource.data.token)).data.studentId == request.resource.data.studentId
-          && get(/databases/$(database)/documents/shops/$(s)/invites/$(request.resource.data.token)).data.classId == request.resource.data.classId
+        allow create,update: if owner(s) && request.resource.data.keys().hasOnly(['studentId','classId','token'])
+          && getAfter(applicationPath(uid)).data.status == 'approved' && getAfter(applicationPath(uid)).data.shopId == s
+          && getAfter(applicationPath(uid)).data.studentId == request.resource.data.studentId && getAfter(applicationPath(uid)).data.token == request.resource.data.token
+          && getAfter(/databases/$(database)/documents/shops/$(s)/invites/$(request.resource.data.token)).data.active == true
+          && getAfter(/databases/$(database)/documents/shops/$(s)/invites/$(request.resource.data.token)).data.studentId == request.resource.data.studentId
+          && getAfter(/databases/$(database)/documents/shops/$(s)/invites/$(request.resource.data.token)).data.classId == request.resource.data.classId
           && getAfter(studentPath(s,request.resource.data.studentId)).data.authUid == uid && getAfter(studentPath(s,request.resource.data.studentId)).data.active == true;
         allow delete: if false;
       }

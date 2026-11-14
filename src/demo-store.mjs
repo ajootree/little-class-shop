@@ -1,14 +1,19 @@
 import {demoSeed,uid,text,integer,checkedBalance,purchaseBalance} from './domain.mjs';
-const key='little-class-shop-demo-v1';
+import {createLoginCode,schoolGrade} from './student-login.mjs';
+const key='little-class-shop-demo-v2';
 export class DemoStore{
   constructor(){try{this.data=JSON.parse(sessionStorage.getItem(key))||demoSeed();}catch{this.data=demoSeed();}this.shopId='demo';}
   save(){sessionStorage.setItem(key,JSON.stringify(this.data));}
   async load(){return structuredClone(this.data);}
   async open(){return this.data.shop;}
-  async addClass(name){const id=uid();this.data.classes.push({id,name:text(name,'학급',30)});this.save();return id;}
+  async addClass(name,grade){const id=uid();this.data.classes.push({id,name:text(name,'학급',30),grade:schoolGrade(grade),joinCode:createLoginCode()});this.save();return id;}
+  async reissueClass(id){const c=this.data.classes.find(c=>c.id===id);c.joinCode=createLoginCode();this.save();return c.joinCode;}
+  async setClassGrade(id,grade){const c=this.data.classes.find(c=>c.id===id);c.grade=schoolGrade(grade);c.joinCode=createLoginCode();this.save();}
+  async approveApplication(id){const a=this.data.applications.find(a=>a.id===id);if(!a||a.status!=='pending')throw new Error('이미 처리한 신청이에요.');if(a.kind==='signup'){const number=Math.max(0,...this.data.students.filter(s=>s.classId===a.classId).map(s=>s.number))+1;this.data.students.push({id:a.studentId,name:a.name,number,classId:a.classId,groupId:Math.ceil(number/4)+'모둠',isLeader:false,balance:0,authUid:a.id,loginVersion:4,lastEventId:'',active:true});this.data.invites.push({id:uid(),studentId:a.studentId,classId:a.classId,grade:a.grade,code:a.code,active:true});}else this.data.students.find(s=>s.id===a.studentId).authUid=a.id;a.status='approved';this.save();}
+  async rejectApplication(id){const a=this.data.applications.find(a=>a.id===id);if(a.status!=='pending')throw new Error('이미 처리한 신청이에요.');a.status='rejected';this.save();}
   async addStudents(classId,names){const result=[];for(const name of names.split(/\r?\n/).filter(Boolean)){const id=uid(),s={id,name:text(name,'이름',24),number:this.data.students.length+1,classId,groupId:'1모둠',isLeader:false,balance:0,authUid:'',lastEventId:'',active:true};this.data.students.push(s);const token=uid();this.data.invites.push({id:token,studentId:id,classId,active:true});result.push({...s,token});}this.save();return result;}
   async editStudent(id,changes){Object.assign(this.data.students.find(s=>s.id===id),changes);this.save();}
-  async reissue(id){this.data.invites.filter(i=>i.studentId===id).forEach(i=>i.active=false);const token=uid();this.data.invites.push({id:token,studentId:id,active:true});this.save();return token;}
+  async reissue(id){this.data.invites.filter(i=>i.studentId===id).forEach(i=>i.active=false);const s=this.data.students.find(s=>s.id===id);s.authUid='';s.loginVersion=4;const c=this.data.classes.find(c=>c.id===s.classId),token=uid(),code=createLoginCode();this.data.invites.push({id:token,studentId:id,classId:s.classId,grade:c.grade,code,active:true});this.save();return code;}
   async addTask(input){const id=uid();this.data.tasks.push({...input,id,title:text(input.title,'과제',100),reward:integer(input.reward,'포인트',1,1000),active:true,createdAt:Date.now()});this.save();return id;}
   async editTask(id,changes){Object.assign(this.data.tasks.find(t=>t.id===id),changes);this.save();}
   async addProduct(p){this.data.products.push({...p,id:uid(),price:integer(p.price,'가격',1,10000),stock:integer(p.stock,'재고',0,10000),art:Number(p.art),active:true});this.save();}
